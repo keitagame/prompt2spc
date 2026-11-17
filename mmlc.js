@@ -46,7 +46,7 @@ dsp  = 0x76 0xE0          ; voice7 ADSR2 (SL=7 SR=0)
 
 [song]
 base       = 0x2000
-limit      = 0x3FFF
+limit      = 0xAFFF
 channels   = 8
 unused_ptr = 0
 
