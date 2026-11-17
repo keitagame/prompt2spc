@@ -1,0 +1,114 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI SPC Generator</title>
+<style>
+:root{color-scheme:light dark;--bg:#f6f6f9;--fg:#1c1c24;--card:#fff;--bd:#d0d0dc;--ac:#5b4bdb}
+@media(prefers-color-scheme:dark){:root{--bg:#14141a;--fg:#e8e8f0;--card:#1f1f29;--bd:#3a3a4a;--ac:#8e82ff}}
+body{margin:0;background:var(--bg);color:var(--fg);font:15px/1.6 system-ui,sans-serif}
+main{max-width:860px;margin:0 auto;padding:16px}
+h1{font-size:1.3rem;margin:.2em 0}
+section{background:var(--card);border:1px solid var(--bd);border-radius:10px;padding:12px;margin:12px 0}
+label{display:block;font-size:.85rem;margin:6px 0 2px}
+input,textarea,select{width:100%;box-sizing:border-box;background:var(--bg);color:var(--fg);border:1px solid var(--bd);border-radius:6px;padding:6px;font:inherit}
+textarea{font-family:ui-monospace,monospace;font-size:.8rem}
+.row{display:flex;gap:8px;flex-wrap:wrap}.row>*{flex:1;min-width:180px}
+button{background:var(--ac);color:#fff;border:0;border-radius:6px;padding:8px 14px;font:inherit;cursor:pointer}
+button:disabled{opacity:.4;cursor:default}button.sub{background:transparent;color:var(--fg);border:1px solid var(--bd)}
+#log{white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:.8rem;max-height:200px;overflow:auto}
+table{border-collapse:collapse;width:100%;font-size:.85rem}td,th{border-bottom:1px solid var(--bd);padding:3px 6px;text-align:left}
+.bar{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+</style>
+</head>
+<body>
+<main>
+<h1>🎹 AI SPC Generator</h1>
+<p style="font-size:.85rem;opacity:.8">作曲AI → 8ch単音MIDI → MML → 音源AI(テキストで減算合成/物理モデリングのレシピ) → BRR → SPC。APIキーはブラウザからAnthropic APIへ直接送られます(自分のサイトで使う場合はプロキシ経由を推奨)。</p>
+<section>
+  <label>どんな曲にしますか？</label>
+  <textarea id="prompt" rows="3">明るく疾走感のあるRPGのフィールド曲。リード・ベース・アルペジオ・ドラム入り。</textarea>
+  <div class="row">
+    <div><label>作曲AI プロバイダ</label><select id="aprov"><option value="anthropic">Anthropic</option><option value="openai">OpenAI互換 (OpenAI / OpenRouter / Ollama / LM Studio等)</option><option value="gemini">Google Gemini</option></select></div>
+    <div><label>モデル</label><input id="amodel"></div>
+    <div><label>APIキー(ローカルは空でも可)</label><input id="akey" type="password" autocomplete="off"></div>
+    <div><label>エンドポイント(空=既定)</label><input id="aep"></div>
+  </div>
+  <details><summary style="cursor:pointer;font-size:.9rem;margin-top:8px">音源AIを別のAI/設定にする</summary>
+  <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="ssame" checked style="width:auto"> 作曲AIと同じ設定を使う</label>
+  <div class="row">
+    <div><label>音源AI プロバイダ</label><select id="sprov"><option value="anthropic">Anthropic</option><option value="openai">OpenAI互換 (OpenAI / OpenRouter / Ollama / LM Studio等)</option><option value="gemini">Google Gemini</option></select></div>
+    <div><label>モデル</label><input id="smodel"></div>
+    <div><label>APIキー(ローカルは空でも可)</label><input id="skey" type="password" autocomplete="off"></div>
+    <div><label>エンドポイント(空=既定)</label><input id="sep"></div>
+  </div>
+  </details>
+  <div class="row"><div><label>または自分のMIDIを使う(作曲AIをスキップ)</label><input id="midi" type="file" accept=".mid,.midi"></div></div>
+  <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="loop" checked style="width:auto"> ループ再生する</label>
+  <div class="bar"><button id="go">生成する</button><span id="status"></span></div>
+</section>
+<section><b>進行ログ</b><div id="log"></div></section>
+<section id="out" hidden>
+  <div class="bar" style="margin:0 0 8px">
+    <button id="play">▶ 再生</button><button id="stop" class="sub">■ 停止</button>
+    <button id="dlspc" class="sub">SPC保存</button><button id="dlmid" class="sub">MIDI保存</button><button id="dlmml" class="sub">MML保存</button>
+  </div>
+  <b>音色(音源AIが設計)</b>
+  <table id="inst"></table>
+  <label>MML(編集して再コンパイルできます)</label>
+  <textarea id="mml" rows="12" spellcheck="false"></textarea>
+  <div class="bar"><button id="recomp" class="sub">MMLから再コンパイル</button></div>
+</section>
+</main>
+<script src="mmlc.js"></script>
+<script src="libspc.js"></script>
+<script src="spcgen.js"></script>
+<script>
+const $=id=>document.getElementById(id);
+let st=null,player=null;
+const log=m=>{const l=$('log');l.textContent+=m+'\n';l.scrollTop=l.scrollHeight};
+for(const p of['a','s']){
+  const pv=$(p+'prov'),md=$(p+'model'),ep=$(p+'ep');
+  const sync=()=>{const d=SPCGEN.DEFAULTS[pv.value];md.placeholder=d.model;ep.placeholder=d.endpoint};
+  pv.onchange=()=>{md.value='';ep.value='';sync()};sync();
+  try{const v=JSON.parse(sessionStorage.getItem('spcgen_'+p)||'{}');if(v.prov){pv.value=v.prov;md.value=v.model||'';ep.value=v.ep||'';$(p+'key').value=v.key||'';sync()}}catch(e){}
+}
+const cfgOf=p=>({provider:$(p+'prov').value,model:$(p+'model').value.trim(),key:$(p+'key').value.trim(),endpoint:$(p+'ep').value.trim()});
+function dl(data,name,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)}
+function fname(){return (st.title||'song').replace(/[^\w\- ]/g,'').trim().replace(/\s+/g,'_')||'song'}
+function load(spc){
+  if(!player)player=new SPCPlayer();
+  player.stop();player.load(spc);player.play();
+}
+function show(){
+  $('out').hidden=false;$('mml').value=st.mml;
+  $('inst').innerHTML='<tr><th>@</th><th>説明</th><th>種類</th><th>サイズ</th></tr>'+st.slots.map((s,i)=>
+    `<tr><td>${i}</td><td></td><td>${({sub:'減算合成',string:'物理モデル(弦)',modal:'物理モデル(共振)',perc:'合成(打楽器)',tone:'合成(倍音)'})[st.fin[i].type]} / ${st.smp.items[i].loop?'ループ':'単発'}</td><td>${st.smp.items[i].brr.length} B</td></tr>`).join('');
+  [...$('inst').rows].slice(1).forEach((r,i)=>r.cells[1].textContent=st.slots[i].desc);
+}
+$('go').onclick=async()=>{
+  const b=$('go');b.disabled=true;$('log').textContent='';$('status').textContent='生成中…';
+  try{
+    const ai=cfgOf('a'),sound=$('ssame').checked?null:cfgOf('s');
+    try{for(const p of['a','s'])sessionStorage.setItem('spcgen_'+p,JSON.stringify({prov:$(p+'prov').value,model:$(p+'model').value,ep:$(p+'ep').value,key:$(p+'key').value}))}catch(e){}
+    const f=$('midi').files[0];
+    if(!f&&!ai.key&&ai.provider!=='openai')throw new Error('APIキーを入力するか、MIDIファイルを選んでください');
+    st=await SPCGEN.generate({prompt:$('prompt').value,ai,sound,loop:$('loop').checked,midiBytes:f?new Uint8Array(await f.arrayBuffer()):null},log);
+    if(st.warnings.length)log('警告: '+st.warnings.join(' / '));
+    show();load(st.spc);log('✔ 完了 — 再生中 ('+st.spc.length+' bytes)');$('status').textContent='完了';
+  }catch(e){log('✖ '+e.message);$('status').textContent='失敗';console.error(e)}
+  b.disabled=false;
+};
+$('recomp').onclick=()=>{
+  try{const r=SPCGEN.recompile($('mml').value,st);st.spc=r.spc;st.mml=$('mml').value;load(r.spc);log('✔ 再コンパイル完了')}
+  catch(e){log('✖ '+e.message)}
+};
+$('play').onclick=()=>{if(st)load(st.spc)};
+$('stop').onclick=()=>player&&player.stop();
+$('dlspc').onclick=()=>dl(st.spc,fname()+'.spc','application/octet-stream');
+$('dlmid').onclick=()=>dl(st.midi,fname()+'.mid','audio/midi');
+$('dlmml').onclick=()=>dl($('mml').value,fname()+'.mml','text/plain');
+</script>
+</body>
+</html>
