@@ -61,21 +61,19 @@ async function callAI(o, system, user, max) {
   throw err;
 }
 
-const COMPOSE_SYS = `あなたはSNES(SPC700, 8ch・各chは単音)向けの一流のゲーム音楽作曲家です。JSONのみを出力してください。必ず "plan" を最初に書いてから tracks を書くこと(先に設計すると曲がまとまります)。
-{"title":"ASCII英数字のみ","bpm":40-200,
- "plan":{"key":"今回の指定に従う","form":"自分で決めた構成と小節数","chords":"小節ごとのコード進行(毎回違う進行にする)","motif":"主題の音型・リズムを文章で"},
- "instruments":[{"id":0,"name":"lead","kind":"tone|perc","desc":"音色の説明(英語・具体的に: 波形/デューティ比/明るさ/アタック/減衰/ビブラートの有無)"}],
- "tracks":[{"inst":0,"pan":64,"notes":[[start,len,midi,vel],[start,len,midi,vel,instId,pan]]}]}
-基本: tracksは最大8本。各trackは単音(和音禁止・重なり禁止)。start/lenは16分音符単位(1小節=16, 小数可: 0.5=32分, 0.75等)。midiは24-83、velは1-127。panは0-127(0=左,64=中央,127=右)でtrackごとに指定(ノート6番目で途中変更可)。instは既定の音色id(ノート5番目で途中切替可)。instrumentsは最大12個。曲は16〜32小節、全ノート数は合計600個以内。
-作曲指針:
-0) ユーザー要望の下に付く【今回の指定】(調/音階・テンポ・ノリ・音色の方向性)は必ず守る。前回と似た曲にならないよう、メロディ・コード進行・リズムパターン・構成を毎回新しく考える(定番のI-V-vi-IVやありがちな音型に頼らない)。
-1) plan.keyの音階内で書く(経過音・借用和音は意図的に)。コード進行に沿ってベースとアルペジオを書く。
-2) 4小節または8小節のフレーズ単位で、問いと答え・反復と変奏・盛り上がり(サビ)と静かな部分の対比をつける。主題(motif)を変奏して繰り返す。
-3) 和音はアルペジオ(16分音符で分散)にするか、2〜3本のトラックに根音・3度・5度を分けて持続音で書く。
-4) ドラムは1〜2トラックにまとめ、ノート5番目のinstIdでkick/snare/closed hat/open hat/crashを切り替える(midi=60固定)。4小節目や8小節目の終わりにフィルを入れる。
-5) 表情: velは拍頭を強く・裏を弱く、フレーズ内で強弱(cresc./dim.)をつける。リードはlenを少し短く(例:0.8〜0.9)してスタッカート/レガートを使い分ける。単調に全ノート同じvel・同じlenにしない。
-6) リード・ベース・ドラムは中央付近、伴奏・装飾・カウンターメロディは左右に振る。
-7) 最後の小節はループ先頭へ自然につながる終わり方にする。`;
+const COMPOSE_SYS = `あなたはSNES(SPC700)向けの作曲家です。曲の長さ・パート構成・曲の進み方・コード進行・拍子感・音色の選び方はすべて自由です。思い描いた曲を最大限に表現してください。JSONのみを出力します。必ず "plan" を最初に書き、設計してから notes を書くこと。
+{"title":"ASCII英数字のみ","bpm":40-220,
+ "plan":{"concept":"曲の雰囲気・情景・物語","key":"調や音階(自由)","form":"パート構成と各部の小節数(自由)","chords":"和声の考え方","motif":"主題の考え方"},
+ "loop_start":0,
+ "instruments":[{"id":0,"name":"lead","kind":"tone|perc","desc":"音色の説明(英語・具体的に: 波形/倍音/明るさ/アタック/減衰/揺れ)"}],
+ "patterns":{"名前":[[start,len,midi,vel],[start,len,midi,vel,instId,pan]]},
+ "tracks":[{"inst":0,"pan":64,"notes":[[start,len,midi,vel],[start,len,midi,vel,instId,pan]],"seq":[["名前",at,transpose,velDelta]]}]}
+【ハードウェア上の制約】tracksは最大8本(8ボイス)。各trackは単音(和音禁止・重なり禁止)。start/lenは16分音符単位(1小節=16の目安。小数可)。midiは12-83、velは1-127。panは0-127。instrumentsは最大16個。bpmは曲全体で固定(途中変更不可)。メロディ・和音・ベース・打楽器・効果音的な音など、使い方は自由(和音はアルペジオや複数trackで)。ノート5番目のinstIdと6番目のpanで途中切替可。
+【データ量】曲データは展開後の全ノート数が合計およそ6000個までなら収まります。長い曲に挑戦してよい。繰り返す部分はpatterns(start=パターン内の相対位置)を定義し、trackのseqで ["名前", 配置位置(16分単位), 移調(半音), 強弱加算] として参照すると出力が短く済みます(打楽器のpatternは移調0)。patternsとnotesは併用できます。
+【最低限のルール】
+1) ループ再生される: 曲の最後はloop_start(16分音符単位。0=曲頭。イントロを1回だけ流してから本編頭へ戻したいときはその位置)へ自然につながること。
+2) 曲として形を持つ: 始まり・展開・山場・結びがあり、部分ごとの役割と対比、主題の再現や変奏がある。
+それ以外(長さ・構成・進行・テンポ・音色・音数・パートの数や役割)はすべて自由。型にはまった定番に寄せず、plan.conceptに沿って独自に設計してください。`;
 
 const SOUND_SYS = `あなたはSNES用の音源デザイナーAIです。音声を直接生成できないので、各instrumentを数式で合成するレシピをJSONのみで返します。
 {"samples":[...]} の各要素は id と type を持ち、typeは次のいずれか(基準音はC4):
@@ -85,7 +83,7 @@ const SOUND_SYS = `あなたはSNES用の音源デザイナーAIです。音声�
 - "modal"(共振モード物理モデル): {"modes":[[周波数比,振幅,減衰秒],...最大16],"strike":0-1,"dur":0.1-1.2} 鐘・木琴・太鼓・金属音向け
 - "tone": {"harmonics":[最大24個の倍音振幅],"gain":0-1} / "perc": {"wave":"sine|square|saw|tri|noise","f0":Hz,"f1":Hz,"noise":0-1,"dur":秒,"decay":1-12}
 kindがtoneの音色は持続音(sub loop:true か tone)にするとよく、percはperc/modal/sub(loop:false)にする。descの楽器の実際の倍音構造・フィルタ・減衰を考えて決めること。
-設計指針(数値はあくまで一例。各instrumentに添えた character と seed に合わせ、波形・倍音・cutoff・res・エンベロープ・デューティ比を毎回大きく変えること。複数instrumentが似た設定にならないように):リードはsquare/saw/tri/pulseから選び、2osc(mult1と2や1と1.5等)でも単oscでもよい。ベースはsine+saw等。パッドは複数osc+ゆっくりしたa。キック/スネア/ハットはperc・sub(loop:false)・modalを使い分ける。ハイハット等ノイズ主体のときはosc levelを0にする。ピアノ/鐘/木琴=modal、ギター/ハープ=string。波形はバンドリミット済み。高いcutoffに強いres(>4)はジャリつくので避ける。`;
+設計は自由です。各instrumentのdescに忠実に、波形・倍音・フィルタ・エンベロープ・物理モデル・モードを自分で選び、数値も制限内で自由に決めてください(定番の値に寄せる必要はなく、音色ごとに個性を出すこと)。技術的な注意: ノイズ主体のsubはosc levelを0にする/高いcutoffに強いres(>4)はジャリつく/波形はバンドリミット済み/サンプル領域は合計およそ16〜40KB(ループ音色は0.5〜3KB、0.2秒の単発は約3.5KB)なので、長い単発音を多用しない。`;
 
 // ---------- SMF 書き出し / 読み込み ----------
 const vlq = n => { const b = [n & 127]; while ((n >>= 7)) b.unshift((n & 127) | 128); return b; };
@@ -171,12 +169,14 @@ function buildMml(lanes, slotOf, o) {
   total = Math.max(192, Math.ceil(Math.min(total, o.maxTick) / 192) * 192);
   let out = '';
   lanes.forEach((l, i) => {
-    const tk = []; if (o.loop) tk.push('L');
+    const tk = []; const LT = o.loop && o.loopTick > 0 && o.loopTick < total ? o.loopTick : 0; let lset = false; if (o.loop && !LT) tk.push('L');
     tk.push('t' + o.bpm);
     let cur = 0, oct = -1, sl = -1, vq = -1, pn = -1;
     for (const n of l) {
       if (n.s >= total) break;
-      const e = Math.min(n.e, total);
+      let e = Math.min(n.e, total);
+      if (LT && !lset && n.s < LT && e > LT) e = LT; // ループ境界をまたぐ音は境界で切る
+      if (LT && !lset && n.s >= LT) { if (cur < LT) { tk.push('r%' + (LT - cur)); cur = LT; } tk.push('L'); lset = true; sl = vq = pn = oct = -1; }
       if (n.s > cur) tk.push('r%' + (n.s - cur));
       let m = n.p; while (m < 12) m += 12; while (m > 83) m -= 12;
       const s = slotOf.get(n.prog) ?? 0;
@@ -190,6 +190,7 @@ function buildMml(lanes, slotOf, o) {
       tk.push(semis[m % 12] + '%' + (e - n.s)); cur = e;
     }
     if (!l.length) return;
+    if (LT && !lset) { if (cur < LT) { tk.push('r%' + (LT - cur)); cur = LT; } tk.push('L'); lset = true; }
     if (total > cur) tk.push('r%' + (total - cur));
     let line = '';
     for (const t of tk) { if (line.length > 60) { out += 'ABCDEFGH'[i] + ' ' + line + '\n'; line = ''; } line += t + ' '; }
@@ -199,9 +200,7 @@ function buildMml(lanes, slotOf, o) {
 }
 
 // ---------- 音源レンダリング → BRR ----------
-let SEED = (Math.random() * 4294967296) >>> 0;
-const pick = a => a[Math.floor(Math.random() * a.length)], rr = (a, b) => a + Math.random() * (b - a);
-const lcg = seed => { let s = (seed ^ SEED) >>> 0; return () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296) * 2 - 1; };
+const lcg = seed => { let s = seed >>> 0; return () => ((s = (Math.imul(s, 1664525) + 1013904223) >>> 0) / 4294967296) * 2 - 1; };
 function renderTone(sp) {
   const P = 32000 / 261.6256; let bn = 1, bL = 128, be = 9;
   for (let n = 1; n <= 8; n++) { const L = Math.max(16, Math.round(n * P / 16) * 16), er = Math.abs(L / n / P - 1); if (er < be) { be = er; bn = n; bL = L; } }
@@ -317,19 +316,9 @@ function renderPhys(sp, scale) {
   for (let i = 0; i < 64; i++) x[N - 1 - i] *= i / 64;
   return { pcm: toI16(x), loop: false, loopStart: 0 };
 }
-const CHARS = ['gritty', 'glassy', 'warm', 'hollow', 'nasal', 'airy', 'metallic', 'woody', 'buzzy', 'soft', 'aggressive', 'dreamy', 'thin', 'fat', 'detuned-feel', 'dark', 'bright'];
-function jitter(x) { // AIが似たレシピを返しても少しずつ変える
-  const m = rr(0.8, 1.25);
-  if (x.filter && x.filter.cutoff) { x.filter.cutoff *= m; if (x.filter.cutoff_end) x.filter.cutoff_end *= m; }
-  if (Array.isArray(x.osc)) x.osc.forEach(o => { if (o.pw) o.pw = clamp(o.pw * rr(0.85, 1.15), 0.08, 0.5); if (o.level) o.level *= rr(0.85, 1.15); });
-  if (Array.isArray(x.harmonics)) x.harmonics = x.harmonics.map(v => v * rr(0.8, 1.2));
-  if (Array.isArray(x.modes)) x.modes = x.modes.map(a => [a[0] * rr(0.99, 1.01), a[1], a[2]]);
-  if (x.f0) x.f0 *= rr(0.85, 1.2);
-  return x;
-}
 const guessSpec = (d, id) => /drum|perc|kick|snare|hat|cymbal|noise|ドラム|打楽|キック|スネア|ハット/i.test(d)
   ? { id, type: 'perc', wave: /hat|cymbal|noise|ハット/i.test(d) ? 'noise' : 'sine', f0: /snare|スネア/i.test(d) ? 220 : 120, f1: 50, noise: /snare|hat|noise|スネア|ハット/i.test(d) ? 0.8 : 0.05, dur: 0.18, decay: 7 }
-  : { id, type: 'tone', harmonics: Array.from({ length: 12 }, (_, k) => Math.pow(1 / (k + 1), rr(0.5, 1.7)) * rr(0.6, 1.2) * (Math.random() < 0.3 && k % 2 ? 0.2 : 1)), gain: 0.8 };
+  : { id, type: 'tone', harmonics: [1, .5, .33, .25, .2, .16, .14, .12], gain: 0.8 };
 function item(sp, scale) {
   switch (sp.type) {
     case 'sub': return renderSub(sp, scale);
@@ -338,14 +327,14 @@ function item(sp, scale) {
     default: return { pcm: renderTone(sp), loop: true, loopStart: 0 };
   }
 }
-function buildSamples(specs) {
-  const cap = SMP_END - SMP_BASE; let scale = 1;
+function buildSamples(specs, base = SMP_BASE) {
+  const cap = SMP_END - base; let scale = 1;
   for (let k = 0; k < 10; k++) {
     const items = specs.map(sp => { const r = item(sp, scale); return { loop: r.loop, loopBlock: r.loopStart / 16, brr: brrEncode(r.pcm, r.loop, r.loopStart / 16) }; });
     const tot = items.reduce((a, s) => a + s.brr.length, 0);
     if (tot <= cap || k === 9) {
       if (tot > cap) throw new Error('サンプル容量超過: ' + tot + ' bytes');
-      let addr = SMP_BASE; const dir = new Uint8Array(items.length * 4);
+      let addr = base; const dir = new Uint8Array(items.length * 4);
       items.forEach((s, i) => { const lp = addr + s.loopBlock * 9; s.addr = addr; dir.set([addr & 255, addr >> 8, lp & 255, lp >> 8], i * 4); addr += s.brr.length; });
       return { items, dir };
     }
@@ -368,7 +357,7 @@ function compileSong(mmlBody, smp, title, seconds, eon) {
 function makeSong(lanes, slotOf, smp, o, log) {
   let maxTick = 1e9;
   for (let k = 0; k < 25; k++) {
-    const b = buildMml(lanes, slotOf, { bpm: o.bpm, loop: o.loop, maxTick });
+    const b = buildMml(lanes, slotOf, { bpm: o.bpm, loop: o.loop, maxTick, loopTick: o.loopTick });
     try {
       const res = compileSong(b.mml, smp, o.title, b.total / TPQ * 60 / o.bpm * (o.loop ? 2 : 1) + 5, o.eon);
       return { res, mml: b.mml, seconds: b.total / TPQ * 60 / o.bpm };
@@ -382,20 +371,26 @@ function makeSong(lanes, slotOf, smp, o, log) {
   throw new Error('曲データを収められませんでした');
 }
 
+function expand(t, pats) { // patterns参照(seq)をノート列に展開
+  const out = (t.notes || []).slice();
+  for (const q of t.seq || []) {
+    const pt = (pats || {})[q[0]]; if (!Array.isArray(pt)) continue;
+    const at = +q[1] || 0, tr = +q[2] || 0, vd = +q[3] || 0;
+    for (const n of pt) { const m = n.slice(); m[0] = +n[0] + at; m[2] = +n[2] + tr; m[3] = (+n[3] || 80) + vd; out.push(m); }
+  }
+  return out;
+}
 // ---------- 全体パイプライン ----------
 async function generate(o, log) {
-  let midi, descs = {}, kinds = {}, title = o.title || 'AI SPC';
+  let midi, descs = {}, kinds = {}, loopTick = 0, title = o.title || 'AI SPC';
   if (o.midiBytes) { midi = o.midiBytes; log('① MIDIファイルを使用'); }
   else {
-    SEED = (Math.random() * 4294967296) >>> 0;
-    const roll = 'キー(主音)=' + pick(['C','C#','D','Eb','E','F','F#','G','Ab','A','Bb','B']) + ' ' + pick(['major','natural minor','dorian','mixolydian','lydian','phrygian','harmonic minor','minor pentatonic']) + ' / bpm目安=' + Math.round(rr(70, 175)) + ' / ノリ=' + pick(['straight 8th driving','syncopated 16th funk','swing/shuffle','half-time heavy','arpeggio-driven','march','floating ambient','breakbeat']) + ' / リード音色の方向性=' + pick(['12.5% pulse thin','25% pulse','50% square mellow','bright saw','soft triangle','bell/FM-like','flute-like','brass-like','plucked','vibraphone-like']) + ' / 伴奏=' + pick(['fast arpeggio','sustained pad chords','offbeat stabs','counter-melody','ostinato']) + ' / 構成の型=' + pick(['A-B-A\'','Intro-A-B-C-A','A-A\'-B-A\'\'','ABAB+coda','build-up→climax']);
-    log('   今回の指定: ' + roll);
     log('① 作曲AIにMIDI(8ch・単音)を生成させています…');
-    const c = await callAI(o.ai, COMPOSE_SYS, 'リクエスト: ' + o.prompt + '\n【今回の指定】' + roll, 12000);
+    const c = await callAI(o.ai, COMPOSE_SYS, 'リクエスト: ' + o.prompt, 32000);
     (c.instruments || []).forEach(i => { descs[i.id] = (i.name || '') + ': ' + (i.desc || ''); kinds[i.id] = i.kind; });
     const lanes = (c.tracks || []).slice(0, 8).map(t => {
       const out = []; const dflt = +t.inst || 0, tp = clamp(Math.round(t.pan ?? 64), 0, 127);
-      for (const n of t.notes || []) {
+      for (const n of expand(t, c.patterns)) {
         const p = clamp(Math.round(+n[2]), 12, 83), v = clamp(Math.round(+n[3]) || 80, 1, 127);
         if (!(n[1] > 0) || !isFinite(n[0])) continue;
         out.push({ s: Math.round(n[0] * 12), d: Math.max(1, Math.round(n[1] * 12)), p, v, prog: n[4] != null ? +n[4] : dflt, pan: n[5] != null ? clamp(Math.round(+n[5]), 0, 127) : tp });
@@ -405,6 +400,7 @@ async function generate(o, log) {
     if (!lanes.length) throw new Error('AIが有効なノートを返しませんでした');
     midi = writeSMF(lanes.map(l => { l.sort((a, b) => a.s - b.s); return l; }), clamp(c.bpm || 120, 40, 255));
     title = c.title || title;
+    loopTick = Math.max(0, Math.round((+c.loop_start || 0) * 12));
     if (c.plan) log('   構成: ' + [c.plan.key, c.plan.form].filter(Boolean).join(' / '));
     log('   → MIDI生成完了 (' + midi.length + ' bytes, ' + lanes.length + 'ch)');
   }
@@ -420,18 +416,26 @@ async function generate(o, log) {
   if (need.length) {
     log('③ AIがテキストで物理モデリング/減算合成のレシピを設計しています…');
     try {
-      const r = await callAI(o.sound || o.ai, SOUND_SYS, JSON.stringify({ seed: SEED, instruments: need.map(s => ({ id: s.slot, kind: s.kind, desc: s.desc, character: [pick(CHARS), pick(CHARS)].join(', ') })) }), 8000);
-      (r.samples || []).forEach(x => { if (need.some(s => s.slot === x.id) && ['tone', 'perc', 'sub', 'string', 'modal'].includes(x.type)) { try { jitter(x); item(x, 1); fin[x.id] = x; } catch (e) { log('   @' + x.id + ' レシピ不正: ' + e.message); } } });
+      const r = await callAI(o.sound || o.ai, SOUND_SYS, JSON.stringify({ instruments: need.map(s => ({ id: s.slot, kind: s.kind, desc: s.desc })) }), 16000);
+      (r.samples || []).forEach(x => { if (need.some(s => s.slot === x.id) && ['tone', 'perc', 'sub', 'string', 'modal'].includes(x.type)) { try { item(x, 1); fin[x.id] = x; } catch (e) { log('   @' + x.id + ' レシピ不正: ' + e.message); } } });
     } catch (e) { log('   テキストAI失敗(' + e.message + ')'); }
     slots.forEach(s => { if (!fin[s.slot]) { fin[s.slot] = guessSpec(s.kind === 'perc' ? 'drum ' + s.desc : s.desc, s.slot); log('   @' + s.slot + ' 既定の音色を使用'); } });
   }
   fin.forEach((sp, i) => { sp._r = ratio[i]; });
+  let base = 0xB000;
+  try { // 曲データのサイズを先に測り、その直後からサンプルを置く(曲に最大36KB)
+    const dm = { dir: new Uint8Array(4), items: [{ addr: 0xB000, brr: new Uint8Array(9) }] };
+    const b0 = buildMml(lanes, slotOf, { bpm, loop: o.loop, maxTick: 1e9, loopTick });
+    const sz = compileSong(b0.mml, dm, title, 60, eon).song.length;
+    base = clamp((0x2000 + sz + 0x1FF) & ~0xFF, 0x4000, 0xB000);
+    log('   曲データ ' + sz + ' bytes / サンプル領域 ' + (SMP_END - base) + ' bytes');
+  } catch (e) { log('   曲データが大きいため一部を短縮します'); }
   log('④ BRR化…');
-  const smp = buildSamples(fin);
+  const smp = buildSamples(fin, base);
   log('   → ' + smp.items.map((s, i) => '@' + i + ':' + fin[i].type + ' ' + s.brr.length + 'B').join(' / '));
   log('⑤ SPCコンパイル…');
-  const r = makeSong(lanes, slotOf, smp, { bpm, loop: o.loop, title, eon }, log);
-  return { eon, spc: r.res.spc, mml: r.mml, midi, slots, fin, smp, title, bpm, lanes, slotOf, seconds: r.seconds, warnings: r.res.warnings };
+  const r = makeSong(lanes, slotOf, smp, { bpm, loop: o.loop, title, eon, loopTick }, log);
+  return { eon, loopTick, spc: r.res.spc, mml: r.mml, midi, slots, fin, smp, title, bpm, lanes, slotOf, seconds: r.seconds, warnings: r.res.warnings };
 }
 // MML手編集後の再コンパイル(サンプルはそのまま)
 function recompile(mml, st) { return compileSong(mml, st.smp, st.title, st.seconds * 2 + 5, st.eon); }
