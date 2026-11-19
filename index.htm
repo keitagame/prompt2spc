@@ -20,12 +20,14 @@ button:disabled{opacity:.4;cursor:default}button.sub{background:transparent;colo
 #log{white-space:pre-wrap;font-family:ui-monospace,monospace;font-size:.8rem;max-height:200px;overflow:auto}
 table{border-collapse:collapse;width:100%;font-size:.85rem}td,th{border-bottom:1px solid var(--bd);padding:3px 6px;text-align:left}
 .bar{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+#evtbl td,#evtbl th{font-size:.78rem}.ok{color:#2a9d4a}.warn{color:#d98a00}
+#handoffs{font-size:.8rem;opacity:.85;white-space:pre-wrap}
 </style>
 </head>
 <body>
 <main>
 <h1>🎹 AI SPC Generator</h1>
-<p style="font-size:.85rem;opacity:.8">作曲AI → 8ch単音MIDI → MML → 音源AI(テキストで減算合成/物理モデリングのレシピ) → BRR → SPC。APIキーはブラウザからAnthropic APIへ直接送られます(自分のサイトで使う場合はプロキシ経由を推奨)。</p>
+<p style="font-size:.85rem;opacity:.8">作曲AI → 8ch単音MIDI → MML → 音源AI(テキストで減算合成/物理モデリングのレシピ) → BRR → SPC。「🤖エージェント」は曲を作り→実際に鳴らして測り→自己評価→修正を繰り返し、AIが切れても別のAIが続きから引き継ぎます。APIキーはブラウザからAI APIへ直接送られます(自分のサイトで使う場合はプロキシ経由を推奨)。</p>
 <section>
   <label>どんな曲にしますか？</label>
   <textarea id="prompt" rows="3">明るく疾走感のあるRPGのフィールド曲。リード・ベース・アルペジオ・ドラム入り。</textarea>
@@ -44,9 +46,33 @@ table{border-collapse:collapse;width:100%;font-size:.85rem}td,th{border-bottom:1
     <div><label>エンドポイント(空=既定)</label><input id="sep"></div>
   </div>
   </details>
+  <details><summary style="cursor:pointer;font-size:.9rem;margin-top:8px">🔁 予備AI(エージェント用: トークン切れ・課金切れ・障害のとき上から順に自動で引き継ぎ)</summary>
+  <p style="font-size:.8rem;opacity:.8;margin:4px 0">最優先は上の「作曲AI」。ここに入れたAIは、そのAIが使えなくなったときに同じ状態から続きを担当します(モデルが違っても可)。</p>
+  <div id="fbrows"></div>
+  </details>
   <div class="row"><div><label>または自分のMIDIを使う(作曲AIをスキップ)</label><input id="midi" type="file" accept=".mid,.midi"></div></div>
   <label style="display:flex;gap:6px;align-items:center"><input type="checkbox" id="loop" checked style="width:auto"> ループ再生する</label>
-  <div class="bar"><button id="go">生成する</button><span id="status"></span></div>
+  <div class="bar"><button id="go" class="sub">ワンショット生成</button><span id="status"></span></div>
+</section>
+<section>
+  <b>🤖 エージェントで作曲</b>
+  <div class="row">
+    <div><label>最大ターン数</label><input id="agturns" type="number" value="40" min="5" max="300"></div>
+    <div><label>合格スコア(1-10)</label><input id="agmin" type="number" value="7" min="1" max="10" step="0.5"></div>
+  </div>
+  <div class="bar">
+    <button id="agstart">🤖 エージェントで作曲</button>
+    <button id="agstop" class="sub" disabled>⏸ 停止</button>
+    <button id="agresume" class="sub" disabled>▶ 再開/続ける</button>
+    <button id="agsave" class="sub" disabled>セッション保存</button>
+    <button id="agload" class="sub">セッション読込</button>
+    <button id="agdrop" class="sub">破棄</button>
+    <input id="agfile" type="file" accept=".json" hidden>
+  </div>
+  <div id="agbanner" class="bar" hidden><button id="agrestore" class="sub"></button></div>
+  <div id="agstat" style="font-size:.85rem;margin-top:6px"></div>
+  <table id="evtbl" hidden><tr><th>rev</th><th>総合</th><th>採点</th><th>AI</th></tr></table>
+  <div id="handoffs"></div>
 </section>
 <section><b>進行ログ</b><div id="log"></div></section>
 <section id="out" hidden>
@@ -64,17 +90,23 @@ table{border-collapse:collapse;width:100%;font-size:.85rem}td,th{border-bottom:1
 <script src="mmlc.js"></script>
 <script src="libspc.js"></script>
 <script src="spcgen.js"></script>
+<script src="agenttools.js"></script>
+<script src="agent.js"></script>
 <script>
 const $=id=>document.getElementById(id);
 let st=null,player=null;
 const log=m=>{const l=$('log');l.textContent+=m+'\n';l.scrollTop=l.scrollHeight};
-for(const p of['a','s']){
+const PFX=['a','s','f1','f2','f3'];
+const POPT='<option value="anthropic">Anthropic</option><option value="openai">OpenAI互換 (OpenAI / OpenRouter / Ollama / LM Studio等)</option><option value="gemini">Google Gemini</option>';
+for(const k of[1,2,3])$('fbrows').insertAdjacentHTML('beforeend',`<div class="row" style="margin-top:6px"><div><label>予備AI ${k} プロバイダ</label><select id="f${k}prov">${POPT}</select></div><div><label>モデル</label><input id="f${k}model"></div><div><label>APIキー(ローカルは空でも可)</label><input id="f${k}key" type="password" autocomplete="off"></div><div><label>エンドポイント(空=既定)</label><input id="f${k}ep"></div></div>`);
+for(const p of PFX){
   const pv=$(p+'prov'),md=$(p+'model'),ep=$(p+'ep');
   const sync=()=>{const d=SPCGEN.DEFAULTS[pv.value];md.placeholder=d.model;ep.placeholder=d.endpoint};
   pv.onchange=()=>{md.value='';ep.value='';sync()};sync();
   try{const v=JSON.parse(sessionStorage.getItem('spcgen_'+p)||'{}');if(v.prov){pv.value=v.prov;md.value=v.model||'';ep.value=v.ep||'';$(p+'key').value=v.key||'';sync()}}catch(e){}
 }
 const cfgOf=p=>({provider:$(p+'prov').value,model:$(p+'model').value.trim(),key:$(p+'key').value.trim(),endpoint:$(p+'ep').value.trim()});
+function saveKeys(){try{for(const p of PFX)sessionStorage.setItem('spcgen_'+p,JSON.stringify({prov:$(p+'prov').value,model:$(p+'model').value,ep:$(p+'ep').value,key:$(p+'key').value}))}catch(e){}}
 function dl(data,name,type){const a=document.createElement('a');a.href=URL.createObjectURL(new Blob([data],{type}));a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),2000)}
 function fname(){return (st.title||'song').replace(/[^\w\- ]/g,'').trim().replace(/\s+/g,'_')||'song'}
 function load(spc){
@@ -91,7 +123,7 @@ $('go').onclick=async()=>{
   const b=$('go');b.disabled=true;$('log').textContent='';$('status').textContent='生成中…';
   try{
     const ai=cfgOf('a'),sound=$('ssame').checked?null:cfgOf('s');
-    try{for(const p of['a','s'])sessionStorage.setItem('spcgen_'+p,JSON.stringify({prov:$(p+'prov').value,model:$(p+'model').value,ep:$(p+'ep').value,key:$(p+'key').value}))}catch(e){}
+    saveKeys();
     const f=$('midi').files[0];
     if(!f&&!ai.key&&ai.provider!=='openai')throw new Error('APIキーを入力するか、MIDIファイルを選んでください');
     st=await SPCGEN.generate({prompt:$('prompt').value,ai,sound,loop:$('loop').checked,midiBytes:f?new Uint8Array(await f.arrayBuffer()):null},log);
@@ -109,6 +141,87 @@ $('stop').onclick=()=>player&&player.stop();
 $('dlspc').onclick=()=>dl(st.spc,fname()+'.spc','application/octet-stream');
 $('dlmid').onclick=()=>dl(st.midi,fname()+'.mid','audio/midi');
 $('dlmml').onclick=()=>dl($('mml').value,fname()+'.mml','text/plain');
+
+// ================= エージェントモード =================
+const LS=(()=>{try{localStorage.setItem('_t','1');localStorage.removeItem('_t');return localStorage}catch(e){return null}})();
+let agent=null,curModel='';
+function provList(){
+  const L=[cfgOf('a')];
+  for(const p of['f1','f2','f3']){const c=cfgOf(p);if(c.key||(c.provider==='openai'&&c.endpoint))L.push(c)}
+  return L;
+}
+function agBusy(b){$('agstart').disabled=b;$('agstop').disabled=!b;$('agresume').disabled=b||!agent;$('agsave').disabled=!agent;$('go').disabled=b}
+function agStatus(){
+  if(!agent)return;const s=agent.st,best=s.evals.reduce((m,e)=>Math.max(m,e.overall),0);
+  $('agstat').textContent=`状態: ${s.status} / turn ${s.turn}/${agent.opts.maxTurns} / rev ${s.rev} / 最高スコア ${best||'-'} / 担当AI: ${curModel||s.lastModel||'-'}`+(s.pauseReason?` / ${s.pauseReason}`:'');
+}
+function evRow(e){
+  $('evtbl').hidden=false;
+  const r=$('evtbl').insertRow();
+  r.innerHTML=`<td>${e.rev}</td><td><b>${e.overall}</b></td><td>${Object.entries(e.scores).map(([k,v])=>k+v).join(' ')}</td><td></td>`;
+  r.cells[3].textContent=e.model||'';
+}
+function renderBoard(){
+  const s=agent.st;while($('evtbl').rows.length>1)$('evtbl').deleteRow(1);
+  $('evtbl').hidden=!s.evals.length;s.evals.forEach(evRow);
+  $('handoffs').textContent=s.handoffs.length?'🔁 引き継ぎ履歴:\n'+s.handoffs.map(h=>`turn${h.turn}: ${h.from} → ${h.to} (${h.reason.slice(0,70)})`).join('\n'):'';
+}
+function onAg(e){
+  switch(e.type){
+    case'model':curModel=e.label;break;
+    case'eval':evRow(e.eval);break;
+    case'switch':$('handoffs').textContent=($('handoffs').textContent||'🔁 引き継ぎ履歴:')+`\nturn${e.turn}: ${e.from} → ${e.to}`;break;
+    case'built':st=e.res;show();break;
+    case'done':if(st)load(st.spc);break;
+  }
+  agStatus();
+}
+function mkAgent(session){
+  const o={goal:$('prompt').value,providers:provList(),storage:LS,maxTurns:Math.max(5,+$('agturns').value||40),minScore:+$('agmin').value||7,log,onEvent:onAg};
+  return session?SPCAGENT.SPCAgent.fromSession(session,o):new SPCAGENT.SPCAgent(o);
+}
+async function agRun(){
+  saveKeys();agent.setProviders(provList());agent.opts.minScore=+$('agmin').value||7;agBusy(true);
+  try{const r=await agent.run();log(r.status==='done'?`✔ 完了: ${r.summary||''} (最高${r.best})`:`⏸ ${r.status}: ${r.reason||''}`);}
+  catch(e){log('✖ '+e.message);console.error(e)}
+  agBusy(false);agStatus();
+}
+$('agstart').onclick=()=>{
+  if(!provList().some(c=>c.key||c.provider==='openai')){log('✖ APIキーを入力してください(作曲AIか予備AI)');return}
+  $('log').textContent='';$('handoffs').textContent='';st=null;
+  agent=mkAgent();agent.opts.maxTurns=Math.max(5,+$('agturns').value||40);renderBoard();agRun();
+};
+$('agstop').onclick=()=>{if(agent){agent.stop();log('… 停止要求(実行中のAI応答が返り次第止まります)')}};
+$('agresume').onclick=()=>{
+  if(!agent)return;
+  if(agent.st.status==='done'){agent.st.status='idle';agent.st.finishRejects=0}
+  agent.opts.maxTurns=Math.max(agent.st.turn+(+$('agturns').value||20),agent.opts.maxTurns);
+  agRun();
+};
+$('agsave').onclick=()=>agent&&dl(agent.exportSession(),'spc-agent-session.json','application/json');
+$('agload').onclick=()=>$('agfile').click();
+$('agfile').onchange=async ev=>{
+  const f=ev.target.files[0];if(!f)return;
+  try{adopt(await f.text())}catch(e){log('✖ セッション読込失敗: '+e.message)}ev.target.value='';
+};
+async function adopt(text){
+  agent=mkAgent(text);$('prompt').value=agent.st.goal;renderBoard();agBusy(false);agStatus();
+  try{st=await agent.build();show()}catch(e){}
+  log(`↩ セッション復元: turn ${agent.st.turn} / ${agent.st.status} — 「再開/続ける」で続きから(AI設定は今の入力を使います)`);
+}
+$('agdrop').onclick=()=>{
+  if(agent&&LS)try{LS.removeItem('spcagent:'+agent.st.id)}catch(e){}
+  if(LS)try{LS.removeItem('spcagent:last')}catch(e){}
+  agent=null;$('agstat').textContent='';$('evtbl').hidden=true;$('handoffs').textContent='';$('agbanner').hidden=true;agBusy(false);
+};
+(function(){ // 前回セッションの復元バナー
+  if(!LS)return;
+  try{const id=LS.getItem('spcagent:last'),raw=id&&LS.getItem('spcagent:'+id);if(!raw)return;
+    const s=JSON.parse(raw);$('agbanner').hidden=false;
+    $('agrestore').textContent=`前回のセッションを復元 (turn ${s.turn} / ${s.status} / ${(s.goal||'').slice(0,24)})`;
+    $('agrestore').onclick=()=>{$('agbanner').hidden=true;adopt(raw)};
+  }catch(e){}
+})();
 </script>
 </body>
 </html>
